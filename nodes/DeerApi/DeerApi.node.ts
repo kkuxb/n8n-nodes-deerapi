@@ -10,7 +10,7 @@ export class DeerApi implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'DeerAPI',
 		name: 'deerApi',
-		icon: 'fa:robot',
+		icon: 'file:deerapi.png',
 		group: ['transform'],
 		version: 1,
 		description: '调用 DeerAPI 进行文字生成和 Gemini 图像生成（支持多图探测）',

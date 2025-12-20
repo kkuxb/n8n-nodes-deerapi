@@ -2,7 +2,7 @@ import { ICredentialType, INodeProperties } from 'n8n-workflow';
 
 export class DeerApi implements ICredentialType {
 	name = 'deerApi';
-	displayName = 'DeerAPI API';
+	displayName = 'DeerAPI';
 	documentationUrl = 'https://apidoc.deerapi.com/';
 	properties: INodeProperties[] = [
 		{

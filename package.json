@@ -1,7 +1,7 @@
 {
-	"name": "n8n-nodes-DeerAPI",
-	"version": "1.0.0",
-	"description": "便捷集成 DeerAI API 到 n8n 工作流，支持文本生成与图片生成。文字生成可自选deerapi上的模型，图片生成默认使用gemini-3-pro-image",
+	"name": "n8n-nodes-deerapi",
+	"version": "1.0.1",
+	"description": "节点和凭证的图标换成DeerApi的图标了",
 	"license": "MIT",
 	"homepage": "",
 	"keywords": [
@@ -21,8 +21,7 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"release": "n8n-node release",
-		"prepublishOnly": "n8n-node prerelease"
+		"release": "n8n-node release"
 	},
 	"files": [
 		"dist"
