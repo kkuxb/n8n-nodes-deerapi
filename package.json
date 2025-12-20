@@ -1,7 +1,7 @@
 {
 	"name": "n8n-nodes-deerapi",
-	"version": "1.0.1",
-	"description": "节点和凭证的图标换成DeerApi的图标了",
+	"version": "1.1.0",
+	"description": "可以配合Extract from File节点，实现文档内容发送给DeerAPI了。",
 	"license": "MIT",
 	"homepage": "",
 	"keywords": [

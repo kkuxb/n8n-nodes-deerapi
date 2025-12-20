@@ -13,7 +13,7 @@ export class DeerApi implements INodeType {
 		icon: 'file:deerapi.png',
 		group: ['transform'],
 		version: 1,
-		description: '调用 DeerAPI 进行文字生成和 Gemini 图像生成（支持多图探测）',
+		description: '调用 DeerAPI 进行文字生成和 Gemini 图像生成',
 		defaults: { name: 'DeerAPI' },
 		inputs: ['main'],
 		outputs: ['main'],
@@ -49,7 +49,7 @@ export class DeerApi implements INodeType {
 				name: 'userPrompt',
 				type: 'string',
 				default: '',
-				required: true,
+				description: '在此输入你的问题。若前置了文档解析节点，文档内容会自动拼接在后',
 			},
 			{
 				displayName: '分辨率',
@@ -101,16 +101,35 @@ export class DeerApi implements INodeType {
 				const propNames = binaryPropInput.split(',').map(s => s.trim()).filter(s => s !== '');
 
 				if (mode === 'text') {
-					// --- 文字生成模式 (OpenAI 格式) ---
+					// --- 文字生成/文档分析模式 (OpenAI 格式) ---
 					const model = this.getNodeParameter('modelId', i) as string;
 					const systemPrompt = this.getNodeParameter('systemPrompt', i) as string;
+
+					// 1. 实现迭代功能：智能检测并拼接 JSON 中的 text 字段
+					let combinedPrompt = userPrompt;
+					const extractedText = items[i].json.text as string | undefined;
+
+					if (extractedText && extractedText.trim() !== '') {
+						if (combinedPrompt && combinedPrompt.trim() !== '') {
+							// 自动拼接用户提示词与文档内容
+							combinedPrompt = `${combinedPrompt}\n\n[参考文档内容]:\n${extractedText}`;
+						} else {
+							// 若用户提示词为空，直接使用文档内容
+							combinedPrompt = extractedText;
+						}
+					}
+
+					// 防止最终 Prompt 为空
+					if (!combinedPrompt || combinedPrompt.trim() === '') {
+						combinedPrompt = '请处理输入的内容';
+					}
 					
-					// 仅探测第一张图片用于多模态对话
+					// 2. 探测图片（保持原有功能）
 					let firstBase64 = '';
 					let firstMime = 'image/jpeg';
 					if (items[i].binary) {
 						for (const p of propNames) {
-							if (items[i].binary![p]) {
+							if (items[i].binary![p] && items[i].binary![p].mimeType.startsWith('image/')) {
 								const buffer = await this.helpers.getBinaryDataBuffer(i, p);
 								firstBase64 = Buffer.from(buffer).toString('base64');
 								firstMime = items[i].binary![p].mimeType;
@@ -119,42 +138,44 @@ export class DeerApi implements INodeType {
 						}
 					}
 
-					const body: any = {
-						model,
-						messages: [
-							{ role: 'system', content: systemPrompt },
-							{ role: 'user', content: firstBase64 ? 
-								[{ type: 'text', text: userPrompt }, { type: 'image_url', image_url: { url: `data:${firstMime};base64,${firstBase64}` } }] : 
-								userPrompt 
-							}
-						]
-					};
+					// 3. 构建多模态请求体
+					const userMessageContent: any = firstBase64 
+						? [
+							{ type: 'text', text: combinedPrompt },
+							{ type: 'image_url', image_url: { url: `data:${firstMime};base64,${firstBase64}` } }
+						  ]
+						: combinedPrompt;
 
 					const responseData = await this.helpers.request({
 						method: 'POST',
 						url: `${baseUrl}/chat/completions`,
 						headers: { Authorization: `Bearer ${credentials.apiKey}` },
-						body,
+						body: {
+							model,
+							messages: [
+								{ role: 'system', content: systemPrompt },
+								{ role: 'user', content: userMessageContent }
+							]
+						},
 						json: true,
 					});
 					returnData.push({ json: responseData });
 
 				} else {
-					// --- 图像生成模式 (Gemini v1beta 格式) --- 
+					// --- 图像生成模式 (保持原有功能，Gemini v1beta 格式) --- 
 					const imageSize = this.getNodeParameter('imageSize', i) as string;
 					const aspectRatio = this.getNodeParameter('aspectRatio', i) as string;
 
-					const parts: any[] = [{ text: userPrompt }]; // [cite: 8]
+					const parts: any[] = [{ text: userPrompt }]; 
 
-					// 自动探测并过滤存在的图片，最多取3张 
 					let imageCount = 0;
 					if (items[i].binary) {
 						for (const p of propNames) {
 							if (items[i].binary![p] && imageCount < 3) {
 								const buffer = await this.helpers.getBinaryDataBuffer(i, p);
 								parts.push({
-									inline_data: { // 
-										data: Buffer.from(buffer).toString('base64'), // [cite: 31]
+									inline_data: { 
+										data: Buffer.from(buffer).toString('base64'), 
 										mime_type: items[i].binary![p].mimeType
 									}
 								});
@@ -163,32 +184,21 @@ export class DeerApi implements INodeType {
 						}
 					}
 
-					const body = {
-						contents: [{ role: 'user', parts }],
-						generationConfig: { 
-							imageSize, 
-							aspectRatio,
-							responseModalities: ["IMAGE"] // 
-						}
-					};
-
 					const res = await this.helpers.request({
 						method: 'POST',
-						// 适配文档要求的 v1beta 路径 
 						url: `${baseUrl.replace(/\/v1$/, '')}/v1beta/models/gemini-3-pro-image:generateContent`,
-						headers: { Authorization: `Bearer ${credentials.apiKey}` }, // 
-						body,
+						headers: { Authorization: `Bearer ${credentials.apiKey}` }, 
+						body: {
+							contents: [{ role: 'user', parts }],
+							generationConfig: { imageSize, aspectRatio, responseModalities: ["IMAGE"] }
+						},
 						json: true,
 					});
 
-					// 解析响应中的 inlineData 
 					let b64Image = '';
 					if (res.candidates && res.candidates[0]?.content?.parts) {
 						for (const part of res.candidates[0].content.parts) {
-							if (part.inlineData?.data) {
-								b64Image = part.inlineData.data;
-								break;
-							}
+							if (part.inlineData?.data) { b64Image = part.inlineData.data; break; }
 						}
 					}
 
@@ -197,8 +207,7 @@ export class DeerApi implements INodeType {
 							Buffer.from(b64Image, 'base64'), 
 							'generated_image.png', 
 							'image/png'
-						); // [cite: 30]
-						
+						); 
 						returnData.push({
 							json: { status: 'success', finishReason: res.candidates[0].finishReason },
 							binary: { data: binaryOutput }
