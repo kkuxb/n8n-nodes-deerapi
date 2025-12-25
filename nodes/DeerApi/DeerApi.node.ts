@@ -13,7 +13,7 @@ export class DeerApi implements INodeType {
 		icon: 'file:deerapi.png',
 		group: ['transform'],
 		version: 1,
-		description: '调用 DeerAPI 进行文字生成和 Gemini 图像生成',
+		description: '便捷调用DeerAPI平台上的各种大模型',
 		defaults: { name: 'DeerAPI' },
 		inputs: ['main'],
 		outputs: ['main'],
@@ -24,10 +24,21 @@ export class DeerApi implements INodeType {
 				name: 'mode',
 				type: 'options',
 				options: [
-					{ name: '文字生成 (自选模型)', value: 'text' },
-					{ name: '图像生成 (Gemini-3-Pro-Image)', value: 'image' },
+					{ name: '文字生成', value: 'text' },
+					{ name: '图像生成', value: 'image' },
 				],
 				default: 'text',
+			},
+			{
+				displayName: '生成模型',
+				name: 'imageModel',
+				type: 'options',
+				displayOptions: { show: { mode: ['image'] } },
+				options: [
+					{ name: 'Gemini-3-Pro-Image', value: 'gemini-3-pro-image' },
+					{ name: '即梦 4.5', value: 'doubao-seedream-4-5-251128' },
+				],
+				default: 'gemini-3-pro-image',
 			},
 			{
 				displayName: '模型 ID',
@@ -49,13 +60,19 @@ export class DeerApi implements INodeType {
 				name: 'userPrompt',
 				type: 'string',
 				default: '',
-				description: '在此输入你的问题。若前置了文档解析节点，文档内容会自动拼接在后',
+				required: true,
 			},
+			// --- 分辨率：Gemini 专用 (包含 1K) ---
 			{
 				displayName: '分辨率',
 				name: 'imageSize',
 				type: 'options',
-				displayOptions: { show: { mode: ['image'] } },
+				displayOptions: { 
+					show: { 
+						mode: ['image'], 
+						imageModel: ['gemini-3-pro-image'] 
+					} 
+				},
 				options: [
 					{ name: '1K', value: '1K' },
 					{ name: '2K', value: '2K' },
@@ -63,11 +80,28 @@ export class DeerApi implements INodeType {
 				],
 				default: '1K',
 			},
+			// --- 分辨率：即梦 4.5 专用 (剔除 1K) ---
+			{
+				displayName: '分辨率',
+				name: 'imageSize',
+				type: 'options',
+				displayOptions: { 
+					show: { 
+						mode: ['image'], 
+						imageModel: ['doubao-seedream-4-5-251128'] 
+					} 
+				},
+				options: [
+					{ name: '2K', value: '2K' },
+					{ name: '4K', value: '4K' },
+				],
+				default: '2K',
+			},
 			{
 				displayName: '尺寸比例',
 				name: 'aspectRatio',
 				type: 'options',
-				displayOptions: { show: { mode: ['image'] } },
+				displayOptions: { show: { mode: ['image'], imageModel: ['gemini-3-pro-image'] } },
 				options: [
 					{ name: '1:1', value: '1:1' }, { name: '3:2', value: '3:2' },
 					{ name: '2:3', value: '2:3' }, { name: '16:9', value: '16:9' },
@@ -82,7 +116,7 @@ export class DeerApi implements INodeType {
 				name: 'binaryPropertyName',
 				type: 'string',
 				default: 'data, data0, data1, data2, file, attachment',
-				description: '代码将自动探测这些属性并提取前3张存在的图片，多个名称用逗号隔开',
+				description: '代码将自动探测这些属性并提取存在的图片作为参考图',
 			},
 		],
 	};
@@ -101,30 +135,15 @@ export class DeerApi implements INodeType {
 				const propNames = binaryPropInput.split(',').map(s => s.trim()).filter(s => s !== '');
 
 				if (mode === 'text') {
-					// --- 文字生成/文档分析模式 (OpenAI 格式) ---
 					const model = this.getNodeParameter('modelId', i) as string;
 					const systemPrompt = this.getNodeParameter('systemPrompt', i) as string;
-
-					// 1. 实现迭代功能：智能检测并拼接 JSON 中的 text 字段
 					let combinedPrompt = userPrompt;
 					const extractedText = items[i].json.text as string | undefined;
 
 					if (extractedText && extractedText.trim() !== '') {
-						if (combinedPrompt && combinedPrompt.trim() !== '') {
-							// 自动拼接用户提示词与文档内容
-							combinedPrompt = `${combinedPrompt}\n\n[参考文档内容]:\n${extractedText}`;
-						} else {
-							// 若用户提示词为空，直接使用文档内容
-							combinedPrompt = extractedText;
-						}
+						combinedPrompt = combinedPrompt ? `${combinedPrompt}\n\n[参考文档内容]:\n${extractedText}` : extractedText;
 					}
 
-					// 防止最终 Prompt 为空
-					if (!combinedPrompt || combinedPrompt.trim() === '') {
-						combinedPrompt = '请处理输入的内容';
-					}
-					
-					// 2. 探测图片（保持原有功能）
 					let firstBase64 = '';
 					let firstMime = 'image/jpeg';
 					if (items[i].binary) {
@@ -138,14 +157,6 @@ export class DeerApi implements INodeType {
 						}
 					}
 
-					// 3. 构建多模态请求体
-					const userMessageContent: any = firstBase64 
-						? [
-							{ type: 'text', text: combinedPrompt },
-							{ type: 'image_url', image_url: { url: `data:${firstMime};base64,${firstBase64}` } }
-						  ]
-						: combinedPrompt;
-
 					const responseData = await this.helpers.request({
 						method: 'POST',
 						url: `${baseUrl}/chat/completions`,
@@ -154,7 +165,7 @@ export class DeerApi implements INodeType {
 							model,
 							messages: [
 								{ role: 'system', content: systemPrompt },
-								{ role: 'user', content: userMessageContent }
+								{ role: 'user', content: firstBase64 ? [{ type: 'text', text: combinedPrompt }, { type: 'image_url', image_url: { url: `data:${firstMime};base64,${firstBase64}` } }] : combinedPrompt }
 							]
 						},
 						json: true,
@@ -162,66 +173,92 @@ export class DeerApi implements INodeType {
 					returnData.push({ json: responseData });
 
 				} else {
-					// --- 图像生成模式 (保持原有功能，Gemini v1beta 格式) --- 
-					const imageSize = this.getNodeParameter('imageSize', i) as string;
-					const aspectRatio = this.getNodeParameter('aspectRatio', i) as string;
+					const imageModel = this.getNodeParameter('imageModel', i) as string;
+					// n8n 会自动获取当前可见的那个名为 imageSize 的参数值
+					const rawSize = this.getNodeParameter('imageSize', i) as string;
 
-					const parts: any[] = [{ text: userPrompt }]; 
-
-					let imageCount = 0;
-					if (items[i].binary) {
-						for (const p of propNames) {
-							if (items[i].binary![p] && imageCount < 3) {
-								const buffer = await this.helpers.getBinaryDataBuffer(i, p);
-								parts.push({
-									inline_data: { 
-										data: Buffer.from(buffer).toString('base64'), 
-										mime_type: items[i].binary![p].mimeType
-									}
-								});
-								imageCount++;
+					if (imageModel === 'gemini-3-pro-image') {
+						const aspectRatio = this.getNodeParameter('aspectRatio', i) as string;
+						const parts: any[] = [{ text: userPrompt }];
+						if (items[i].binary) {
+							let count = 0;
+							for (const p of propNames) {
+								if (items[i].binary![p] && count < 3) {
+									const buffer = await this.helpers.getBinaryDataBuffer(i, p);
+									parts.push({ inline_data: { data: Buffer.from(buffer).toString('base64'), mime_type: items[i].binary![p].mimeType } });
+									count++;
+								}
 							}
 						}
-					}
-
-					const res = await this.helpers.request({
-						method: 'POST',
-						url: `${baseUrl.replace(/\/v1$/, '')}/v1beta/models/gemini-3-pro-image:generateContent`,
-						headers: { Authorization: `Bearer ${credentials.apiKey}` }, 
-						body: {
-							contents: [{ role: 'user', parts }],
-							generationConfig: { imageSize, aspectRatio, responseModalities: ["IMAGE"] }
-						},
-						json: true,
-					});
-
-					let b64Image = '';
-					if (res.candidates && res.candidates[0]?.content?.parts) {
-						for (const part of res.candidates[0].content.parts) {
-							if (part.inlineData?.data) { b64Image = part.inlineData.data; break; }
-						}
-					}
-
-					if (b64Image) {
-						const binaryOutput = await this.helpers.prepareBinaryData(
-							Buffer.from(b64Image, 'base64'), 
-							'generated_image.png', 
-							'image/png'
-						); 
-						returnData.push({
-							json: { status: 'success', finishReason: res.candidates[0].finishReason },
-							binary: { data: binaryOutput }
+						const res = await this.helpers.request({
+							method: 'POST',
+							url: `${baseUrl.replace(/\/v1$/, '')}/v1beta/models/gemini-3-pro-image:generateContent`,
+							headers: { Authorization: `Bearer ${credentials.apiKey}` },
+							body: { contents: [{ role: 'user', parts }], generationConfig: { imageSize: rawSize, aspectRatio, responseModalities: ["IMAGE"] } },
+							json: true,
 						});
+
+						const b64 = res.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData.data;
+						if (b64) {
+							const binaryOutput = await this.helpers.prepareBinaryData(Buffer.from(b64, 'base64'), 'gemini_image.png', 'image/png');
+							returnData.push({ json: { status: 'success' }, binary: { data: binaryOutput } });
+						} else throw new Error(`Gemini 接口未返回图像。`);
+
 					} else {
-						const apiError = res.error?.message || JSON.stringify(res);
-						throw new Error(`API 未返回图像。详情: ${apiError}`);
+						// --- 即梦 4.5 模式 ---
+						const images: string[] = [];
+						if (items[i].binary) {
+							for (const p of propNames) {
+								if (items[i].binary![p] && images.length < 3) {
+									const bin = items[i].binary![p];
+									const buffer = await this.helpers.getBinaryDataBuffer(i, p);
+									images.push(`data:${bin.mimeType};base64,${Buffer.from(buffer).toString('base64')}`);
+								}
+							}
+						}
+
+						const responseData = await this.helpers.request({
+							method: 'POST',
+							url: `${baseUrl}/images/generations`,
+							headers: { Authorization: `Bearer ${credentials.apiKey}` },
+							body: {
+								model: imageModel,
+								prompt: userPrompt,
+								size: rawSize,
+								n: 1,
+								response_format: 'b64_json',
+								image: images.length === 1 ? images[0] : (images.length > 1 ? images : undefined),
+								watermark: true
+							},
+							json: true,
+						});
+
+						if (responseData.data && responseData.data[0]) {
+							const imgItem = responseData.data[0];
+							const b64Data = imgItem.b64_json || imgItem.url;
+							
+							if (b64Data) {
+								const binaryOutput = await this.helpers.prepareBinaryData(
+									Buffer.from(b64Data, 'base64'), 
+									`doubao_image.png`, 
+									'image/png'
+								);
+								returnData.push({ 
+									json: { 
+										status: 'success', 
+										model: responseData.model,
+										created: responseData.created 
+									}, 
+									binary: { data: binaryOutput } 
+								});
+							}
+						} else {
+							throw new Error(`即梦接口未返回有效的图像数据。`);
+						}
 					}
 				}
 			} catch (error) {
-				if (this.continueOnFail()) {
-					returnData.push({ json: { error: error.message } });
-					continue;
-				}
+				if (this.continueOnFail()) { returnData.push({ json: { error: error.message } }); continue; }
 				throw new NodeOperationError(this.getNode(), error);
 			}
 		}

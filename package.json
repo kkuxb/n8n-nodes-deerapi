@@ -1,7 +1,7 @@
 {
 	"name": "n8n-nodes-deerapi",
-	"version": "1.1.0",
-	"description": "可以配合Extract from File节点，实现文档内容发送给DeerAPI了。",
+	"version": "1.2.0",
+	"description": "便捷调用DeerAPI平台的各种大模型",
 	"license": "MIT",
 	"homepage": "",
 	"keywords": [
