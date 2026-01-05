@@ -421,6 +421,7 @@ export class DeerApi implements INodeType {
 							qs: { variant: 'video' },
 							encoding: null,
 							resolveWithFullResponse: true,
+							timeout: 300000, // 增加超时时间到 5 分钟 (300,000ms) 以支持大视频下载
 						});
 						const binaryOutput = await this.helpers.prepareBinaryData(
 							Buffer.from(response.body), 
