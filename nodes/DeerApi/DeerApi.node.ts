@@ -13,7 +13,7 @@ export class DeerApi implements INodeType {
 		icon: 'file:deerapi.png',
 		group: ['transform'],
 		version: 1,
-		description: '调用 DeerAPI 进行文字、图像及 Sora 2 视频生成（支持故事板模式）',
+		description: '调用 DeerAPI 进行文字、图像、Sora 2 视频生成及向量嵌入',
 		defaults: { name: 'DeerAPI' },
 		inputs: ['main'],
 		outputs: ['main'],
@@ -27,6 +27,7 @@ export class DeerApi implements INodeType {
 					{ name: '文字生成', value: 'text' },
 					{ name: '图像生成', value: 'image' },
 					{ name: '视频生成 (Sora 2)', value: 'video' },
+					{ name: '向量嵌入 (Embeddings)', value: 'embeddings' },
 				],
 				default: 'text',
 			},
@@ -205,6 +206,28 @@ export class DeerApi implements INodeType {
 				],
 				default: '1:1',
 			},
+			// --- Embeddings 参数 ---
+			{
+				displayName: '嵌入模型',
+				name: 'embeddingModel',
+				type: 'options',
+				displayOptions: { show: { mode: ['embeddings'] } },
+				options: [
+					{ name: 'text-embedding-3-large', value: 'text-embedding-3-large' },
+					{ name: 'text-embedding-3-small', value: 'text-embedding-3-small' },
+				],
+				default: 'text-embedding-3-large',
+			},
+			{
+				displayName: '输入文本',
+				name: 'embeddingInput',
+				type: 'string',
+				displayOptions: { show: { mode: ['embeddings'] } },
+				default: '',
+				required: true,
+				description: '需要生成向量嵌入的文本内容',
+			},
+			// --- 图片属性名 ---
 			{
 				displayName: '图片属性名',
 				name: 'binaryPropertyName',
@@ -439,6 +462,20 @@ export class DeerApi implements INodeType {
 						});
 						returnData.push({ json: res });
 					}
+				}
+
+				else if (mode === 'embeddings') {
+					const model = this.getNodeParameter('embeddingModel', i) as string;
+					const input = this.getNodeParameter('embeddingInput', i) as string;
+
+					const responseData = await this.helpers.request({
+						method: 'POST',
+						url: `${rawBaseUrl}/embeddings`,
+						headers: { Authorization: `Bearer ${credentials.apiKey}` },
+						body: { model, input },
+						json: true,
+					});
+					returnData.push({ json: responseData });
 				}
 			} catch (error) {
 				if (this.continueOnFail()) { returnData.push({ json: { error: error.message } }); continue; }
