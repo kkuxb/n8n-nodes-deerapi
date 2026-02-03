@@ -54,58 +54,64 @@ async function collectImagesFromNodes(
 		}
 	};
 
-	// 辅助函数：从其他节点的 Binary 中提取图片
-	const extractFromNodeData = async (
-		nodeData: INodeExecutionData,
-		sourceName: string,
+	// 辅助函数：从指定节点的 Binary 中提取图片
+	// 使用 getBinaryDataBuffer 的第三个参数 sourceNodeName 来跨节点读取
+	const extractFromNode = async (
+		nodeName: string,
+		nodeItemIndex: number,
 	): Promise<void> => {
-		if (!nodeData.binary) return;
+		try {
+			// 获取指定节点的数据
+			const nodeItems = context.evaluateExpression(
+				`{{ $('${nodeName}').all() }}`,
+				itemIndex
+			) as INodeExecutionData[] | undefined;
 
-		for (const propName of propNames) {
-			if (images.length >= maxImages) break;
+			if (!nodeItems || !Array.isArray(nodeItems) || nodeItems.length === 0) return;
 
-			const binaryData = nodeData.binary[propName] as IBinaryData | undefined;
-			if (!binaryData) continue;
-			if (!binaryData.mimeType?.startsWith('image/')) continue;
+			const nodeItem = nodeItems[nodeItemIndex] || nodeItems[0];
+			if (!nodeItem?.binary) return;
 
-			// 检查是否已存在相同图片（通过 id 或 fileName+mimeType 判断）
-			const alreadyExists = images.some(img => {
-				// 如果有 binaryData.id，优先用 id 判断
-				if (binaryData.id && img.fileName === binaryData.id) return true;
-				return img.fileName === binaryData.fileName && img.mimeType === binaryData.mimeType;
-			});
-			if (alreadyExists) continue;
+			for (const propName of propNames) {
+				if (images.length >= maxImages) break;
 
-			try {
-				let buffer: Buffer | null = null;
+				const binaryData = nodeItem.binary[propName] as IBinaryData | undefined;
+				if (!binaryData) continue;
+				if (!binaryData.mimeType?.startsWith('image/')) continue;
 
-				// 方案1：尝试从 id 读取（文件存储模式）
-				if (binaryData.id) {
-					try {
-						const stream = await context.helpers.getBinaryStream(binaryData.id);
-						buffer = await context.helpers.binaryToBuffer(stream);
-					} catch {
-						// getBinaryStream 失败，尝试其他方法
+				// 检查是否已存在相同图片
+				const alreadyExists = images.some(img => {
+					if (binaryData.id && img.fileName === binaryData.id) return true;
+					return img.fileName === binaryData.fileName && img.mimeType === binaryData.mimeType;
+				});
+				if (alreadyExists) continue;
+
+				try {
+					// 使用 getBinaryDataBuffer 的第三个参数读取指定节点的 binary
+					// TypeScript 类型定义不完整，需要类型断言
+					const getBinaryBuffer = context.helpers.getBinaryDataBuffer as (
+						itemIndex: number,
+						propertyName: string,
+						sourceNodeName?: string,
+					) => Promise<Buffer>;
+
+					const buffer = await getBinaryBuffer(nodeItemIndex, propName, nodeName);
+
+					if (buffer) {
+						images.push({
+							base64: buffer.toString('base64'),
+							mimeType: binaryData.mimeType,
+							fileName: binaryData.fileName,
+							buffer,
+							sourceName: nodeName,
+						});
 					}
+				} catch {
+					// 无法读取该图片，跳过
 				}
-
-				// 方案2：尝试从 data 字段读取（内存模式）
-				if (!buffer && binaryData.data) {
-					buffer = Buffer.from(binaryData.data, 'base64');
-				}
-
-				if (buffer) {
-					images.push({
-						base64: buffer.toString('base64'),
-						mimeType: binaryData.mimeType,
-						fileName: binaryData.fileName,
-						buffer,
-						sourceName,
-					});
-				}
-			} catch {
-				// 无法读取该图片，跳过
 			}
+		} catch {
+			// 节点不存在或无法访问
 		}
 	};
 
@@ -118,23 +124,8 @@ async function collectImagesFromNodes(
 
 		for (const nodeName of nodeNames) {
 			if (images.length >= maxImages) break;
-
-			try {
-				// 获取指定节点的所有输出项
-				const nodeItems = context.evaluateExpression(
-					`{{ $('${nodeName}').all() }}`,
-					itemIndex
-				) as INodeExecutionData[] | undefined;
-
-				if (nodeItems && Array.isArray(nodeItems) && nodeItems.length > 0) {
-					for (const nodeItem of nodeItems) {
-						if (images.length >= maxImages) break;
-						await extractFromNodeData(nodeItem, nodeName);
-					}
-				}
-			} catch {
-				// 节点不存在或没有数据，跳过
-			}
+			// 使用当前 itemIndex 从指定节点读取
+			await extractFromNode(nodeName, itemIndex);
 		}
 
 		// 如果指定节点没有找到数据，回退到当前输入
@@ -147,49 +138,16 @@ async function collectImagesFromNodes(
 
 		// 如果当前输入没有图片或数量不够，尝试从其他节点获取
 		if (images.length < maxImages) {
-			try {
-				// 获取所有输入连接的节点
-				const dataProxy = context.getWorkflowDataProxy(itemIndex);
+			// 尝试常见的节点名称
+			const commonNodeNames = [
+				'HTTP Request', 'Read Binary File', 'Read Binary Files',
+				'HTTP Request1', 'HTTP Request2', 'Read Binary File1',
+				'Download', 'Get File', 'Google Drive', 'S3',
+			];
 
-				// 尝试从 $input 获取所有输入数据
-				try {
-					const allInputs = dataProxy.$input.all();
-					for (const input of allInputs) {
-						if (images.length >= maxImages) break;
-						await extractFromNodeData(input as INodeExecutionData, 'auto-input');
-					}
-				} catch {
-					// $input.all() 不可用
-				}
-
-				// 尝试常见的节点名称
-				const commonNodeNames = [
-					'HTTP Request', 'Read Binary File', 'Read Binary Files',
-					'HTTP Request1', 'HTTP Request2', 'Read Binary File1',
-					'Download', 'Get File', 'Google Drive', 'S3',
-				];
-
-				for (const nodeName of commonNodeNames) {
-					if (images.length >= maxImages) break;
-
-					try {
-						const nodeItems = context.evaluateExpression(
-							`{{ $('${nodeName}').all() }}`,
-							itemIndex
-						) as INodeExecutionData[] | undefined;
-
-						if (nodeItems && Array.isArray(nodeItems) && nodeItems.length > 0) {
-							for (const nodeItem of nodeItems) {
-								if (images.length >= maxImages) break;
-								await extractFromNodeData(nodeItem, nodeName);
-							}
-						}
-					} catch {
-						// 节点不存在
-					}
-				}
-			} catch {
-				// 无法获取工作流代理
+			for (const nodeName of commonNodeNames) {
+				if (images.length >= maxImages) break;
+				await extractFromNode(nodeName, itemIndex);
 			}
 		}
 	}

@@ -4,9 +4,9 @@
 
 ### Fixed
 
-- **修复跨节点 Binary 读取问题**：现在支持 n8n 文件存储模式
-- 使用 `getBinaryStream(id)` + `binaryToBuffer()` 读取文件模式下的 Binary 数据
-- 同时兼容内存模式（data 字段）和文件模式（id 字段）
+- **修复跨节点 Binary 读取问题**：使用正确的 API 实现跨节点读取
+- 使用 `getBinaryDataBuffer(itemIndex, propertyName, sourceNodeName)` 的第三个参数指定源节点
+- 该方法同时支持 n8n 的内存模式和文件存储模式
 
 ## [1.5.0] - 2025-02-03
 
