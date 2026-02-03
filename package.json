@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-deerapi",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"description": "便捷调用 DeerAPI 进行文字、图像、Sora 2 视频生成及向量嵌入",
 	"license": "MIT",
 	"homepage": "",
