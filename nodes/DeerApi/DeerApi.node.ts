@@ -4,7 +4,197 @@ import {
 	INodeType,
 	INodeTypeDescription,
 	NodeOperationError,
+	IBinaryKeyData,
 } from 'n8n-workflow';
+
+// 收集到的 Binary 数据项
+interface CollectedBinaryItem {
+	binary: IBinaryKeyData;
+	nodeName: string;
+}
+
+// 收集 Binary 数据的辅助函数
+async function collectBinaryItems(
+	context: IExecuteFunctions,
+	itemIndex: number,
+	sourceMode: string,
+	sourceNodeNames: string,
+): Promise<CollectedBinaryItem[]> {
+	const results: CollectedBinaryItem[] = [];
+	const items = context.getInputData();
+
+	if (sourceMode === 'current') {
+		// 仅当前输入：保持现有行为
+		if (items[itemIndex]?.binary) {
+			results.push({
+				binary: items[itemIndex].binary!,
+				nodeName: 'current',
+			});
+		}
+	} else if (sourceMode === 'specified') {
+		// 指定节点：从用户指定的节点获取
+		const nodeNames = sourceNodeNames.split(',').map(s => s.trim()).filter(s => s !== '');
+		for (const nodeName of nodeNames) {
+			try {
+				const nodeOutputData = context.evaluateExpression(
+					`{{ $('${nodeName}').first().binary }}`,
+					itemIndex
+				) as IBinaryKeyData | undefined;
+				if (nodeOutputData && typeof nodeOutputData === 'object') {
+					results.push({
+						binary: nodeOutputData,
+						nodeName,
+					});
+				}
+			} catch {
+				// 节点不存在或没有数据，跳过
+			}
+		}
+		// 如果指定节点没有找到数据，也检查当前输入作为后备
+		if (results.length === 0 && items[itemIndex]?.binary) {
+			results.push({
+				binary: items[itemIndex].binary!,
+				nodeName: 'current',
+			});
+		}
+	} else if (sourceMode === 'auto') {
+		// 自动查找：先添加当前输入，再尝试向上遍历
+		if (items[itemIndex]?.binary) {
+			results.push({
+				binary: items[itemIndex].binary!,
+				nodeName: 'current',
+			});
+		}
+		// 尝试获取工作流中的其他节点数据
+		// 使用 getWorkflowDataProxy 来获取可访问的节点
+		try {
+			const currentNodeName = context.getNode().name;
+			const dataProxy = context.getWorkflowDataProxy(itemIndex);
+
+			// 尝试从 $runIndex 获取已运行的节点
+			// 遍历常见的节点名称模式
+			const possibleNodePrefixes = [
+				'HTTP Request', 'Read Binary File', 'Read Binary Files',
+				'Download', 'Get', 'Fetch', 'Load', 'Image', 'File',
+				'Google Drive', 'Dropbox', 'S3', 'FTP', 'SFTP',
+			];
+
+			// 尝试获取每个可能的节点
+			for (let nodeIndex = 0; nodeIndex < 20; nodeIndex++) {
+				for (const prefix of possibleNodePrefixes) {
+					const nodeName = nodeIndex === 0 ? prefix : `${prefix}${nodeIndex}`;
+					if (nodeName === currentNodeName) continue;
+
+					try {
+						const nodeOutputData = context.evaluateExpression(
+							`{{ $('${nodeName}').first().binary }}`,
+							itemIndex
+						) as IBinaryKeyData | undefined;
+						if (nodeOutputData && typeof nodeOutputData === 'object' && Object.keys(nodeOutputData).length > 0) {
+							// 检查是否已经添加过（避免重复）
+							const alreadyExists = results.some(r =>
+								r.nodeName === nodeName ||
+								JSON.stringify(r.binary) === JSON.stringify(nodeOutputData)
+							);
+							if (!alreadyExists) {
+								results.push({
+									binary: nodeOutputData,
+									nodeName,
+								});
+							}
+						}
+					} catch {
+						// 该节点不存在或没有输出，跳过
+					}
+				}
+			}
+
+			// 也尝试直接使用 $input 的 all() 来获取所有输入节点的数据
+			try {
+				const allInputs = dataProxy.$input.all();
+				for (const input of allInputs) {
+					if (input.binary) {
+						const alreadyExists = results.some(r =>
+							JSON.stringify(r.binary) === JSON.stringify(input.binary)
+						);
+						if (!alreadyExists) {
+							results.push({
+								binary: input.binary as IBinaryKeyData,
+								nodeName: 'input',
+							});
+						}
+					}
+				}
+			} catch {
+				// 无法获取输入数据，忽略
+			}
+		} catch {
+			// 无法获取工作流信息，忽略
+		}
+	}
+
+	return results;
+}
+
+// 从收集的 Binary 数据中提取图片的 Base64（用于需要读取 buffer 的场景）
+async function extractImagesFromCollected(
+	context: IExecuteFunctions,
+	itemIndex: number,
+	collectedItems: CollectedBinaryItem[],
+	propNames: string[],
+	maxImages: number,
+): Promise<Array<{ base64: string; mimeType: string; fileName?: string; buffer?: Buffer }>> {
+	const images: Array<{ base64: string; mimeType: string; fileName?: string; buffer?: Buffer }> = [];
+
+	for (const collected of collectedItems) {
+		if (images.length >= maxImages) break;
+
+		for (const propName of propNames) {
+			if (images.length >= maxImages) break;
+
+			const binaryData = collected.binary[propName];
+			if (!binaryData) continue;
+			if (!binaryData.mimeType?.startsWith('image/')) continue;
+
+			try {
+				let buffer: Buffer;
+				if (collected.nodeName === 'current') {
+					// 当前节点的数据，使用标准方法获取
+					buffer = await context.helpers.getBinaryDataBuffer(itemIndex, propName);
+				} else {
+					// 其他节点的数据，从 binaryData 中直接读取
+					if (binaryData.data) {
+						buffer = Buffer.from(binaryData.data, 'base64');
+					} else if (binaryData.id) {
+						// 如果是存储在文件系统中的二进制数据，尝试通过表达式获取
+						const binaryBuffer = context.evaluateExpression(
+							`{{ $('${collected.nodeName}').first().binary['${propName}'].data }}`,
+							itemIndex
+						) as string | undefined;
+						if (binaryBuffer) {
+							buffer = Buffer.from(binaryBuffer, 'base64');
+						} else {
+							continue;
+						}
+					} else {
+						continue;
+					}
+				}
+
+				images.push({
+					base64: buffer.toString('base64'),
+					mimeType: binaryData.mimeType,
+					fileName: binaryData.fileName,
+					buffer,
+				});
+			} catch {
+				// 无法读取该图片，跳过
+			}
+		}
+	}
+
+	return images;
+}
 
 export class DeerApi implements INodeType {
 	description: INodeTypeDescription = {
@@ -227,18 +417,55 @@ export class DeerApi implements INodeType {
 				required: true,
 				description: '需要生成向量嵌入的文本内容',
 			},
-			// --- 图片属性名 ---
+			// --- 图片来源设置 ---
+			{
+				displayName: '图片来源',
+				name: 'binarySourceMode',
+				type: 'options',
+				options: [
+					{ name: '仅当前输入', value: 'current' },
+					{ name: '自动查找（向上遍历）', value: 'auto' },
+					{ name: '指定节点', value: 'specified' },
+				],
+				default: 'current',
+				displayOptions: {
+					show: {
+						mode: ['text', 'image', 'video']
+					},
+					hide: {
+						videoOperation: ['remix', 'retrieve', 'download', 'list']
+					}
+				},
+				description: '选择从哪里获取 Binary 图片数据。"仅当前输入"为默认行为；"自动查找"会向上遍历所有节点；"指定节点"可手动填写节点名称。',
+			},
+			{
+				displayName: '来源节点名称',
+				name: 'sourceNodeNames',
+				type: 'string',
+				default: '',
+				placeholder: 'HTTP Request, Read Binary File',
+				displayOptions: {
+					show: {
+						mode: ['text', 'image', 'video'],
+						binarySourceMode: ['specified'],
+					},
+					hide: {
+						videoOperation: ['remix', 'retrieve', 'download', 'list']
+					}
+				},
+				description: '指定包含图片的节点名称，多个节点用逗号分隔',
+			},
 			{
 				displayName: '图片属性名',
 				name: 'binaryPropertyName',
 				type: 'string',
 				default: 'data, data0, data1, data2, file, attachment',
 				displayOptions: {
-					show: { 
-						mode: ['text', 'image', 'video'] 
+					show: {
+						mode: ['text', 'image', 'video']
 					},
-					hide: { 
-						videoOperation: ['remix', 'retrieve', 'download', 'list'] 
+					hide: {
+						videoOperation: ['remix', 'retrieve', 'download', 'list']
 					}
 				},
 				description: '用于文字识别、图像参考、及视频创建的参考图',
@@ -259,6 +486,13 @@ export class DeerApi implements INodeType {
 				const binaryPropInput = this.getNodeParameter('binaryPropertyName', i, 'data, data0, data1, data2, file, attachment') as string;
 				const propNames = binaryPropInput.split(',').map(s => s.trim()).filter(s => s !== '');
 
+				// 获取图片来源模式参数
+				const binarySourceMode = this.getNodeParameter('binarySourceMode', i, 'current') as string;
+				const sourceNodeNames = this.getNodeParameter('sourceNodeNames', i, '') as string;
+
+				// 收集 Binary 数据
+				const collectedBinaryItems = await collectBinaryItems(this, i, binarySourceMode, sourceNodeNames);
+
 				if (mode === 'text') {
 					const userPrompt = this.getNodeParameter('userPrompt', i) as string;
 					const model = this.getNodeParameter('modelId', i) as string;
@@ -270,18 +504,10 @@ export class DeerApi implements INodeType {
 						combinedPrompt = combinedPrompt ? `${combinedPrompt}\n\n[参考文档内容]:\n${extractedText}` : extractedText;
 					}
 
-					let firstBase64 = '';
-					let firstMime = 'image/jpeg';
-					if (items[i].binary) {
-						for (const p of propNames) {
-							if (items[i].binary![p] && items[i].binary![p].mimeType.startsWith('image/')) {
-								const buffer = await this.helpers.getBinaryDataBuffer(i, p);
-								firstBase64 = Buffer.from(buffer).toString('base64');
-								firstMime = items[i].binary![p].mimeType;
-								break;
-							}
-						}
-					}
+					// 使用新的收集函数提取图片
+					const extractedImages = await extractImagesFromCollected(this, i, collectedBinaryItems, propNames, 1);
+					const firstBase64 = extractedImages.length > 0 ? extractedImages[0].base64 : '';
+					const firstMime = extractedImages.length > 0 ? extractedImages[0].mimeType : 'image/jpeg';
 
 					const responseData = await this.helpers.request({
 						method: 'POST',
@@ -306,16 +532,13 @@ export class DeerApi implements INodeType {
 					if (imageModel === 'gemini-3-pro-image') {
 						const aspectRatio = this.getNodeParameter('aspectRatio', i) as string;
 						const parts: any[] = [{ text: userPrompt }];
-						if (items[i].binary) {
-							let count = 0;
-							for (const p of propNames) {
-								if (items[i].binary![p] && count < 3) {
-									const buffer = await this.helpers.getBinaryDataBuffer(i, p);
-									parts.push({ inline_data: { data: Buffer.from(buffer).toString('base64'), mime_type: items[i].binary![p].mimeType } });
-									count++;
-								}
-							}
+
+						// 使用新的收集函数提取图片（最多3张）
+						const extractedImages = await extractImagesFromCollected(this, i, collectedBinaryItems, propNames, 3);
+						for (const img of extractedImages) {
+							parts.push({ inline_data: { data: img.base64, mime_type: img.mimeType } });
 						}
+
 						const res = await this.helpers.request({
 							method: 'POST',
 							url: `${rawBaseUrl.replace(/\/v1$/, '')}/v1beta/models/gemini-3-pro-image:generateContent`,
@@ -330,15 +553,10 @@ export class DeerApi implements INodeType {
 						} else throw new Error(`Gemini 接口未返回图像。`);
 
 					} else {
-						const images: string[] = [];
-						if (items[i].binary) {
-							for (const p of propNames) {
-								if (items[i].binary![p] && images.length < 3) {
-									const buffer = await this.helpers.getBinaryDataBuffer(i, p);
-									images.push(`data:${items[i].binary![p].mimeType};base64,${Buffer.from(buffer).toString('base64')}`);
-								}
-							}
-						}
+						// 使用新的收集函数提取图片（最多3张）
+						const extractedImages = await extractImagesFromCollected(this, i, collectedBinaryItems, propNames, 3);
+						const images: string[] = extractedImages.map(img => `data:${img.mimeType};base64,${img.base64}`);
+
 						const responseData = await this.helpers.request({
 							method: 'POST',
 							url: `${rawBaseUrl}/images/generations`,
@@ -374,18 +592,14 @@ export class DeerApi implements INodeType {
 
 						const formData: any = { prompt: finalPrompt, model, size };
 
-						if (items[i].binary) {
-							for (const p of propNames) {
-								if (items[i].binary![p] && items[i].binary![p].mimeType.startsWith('image/')) {
-									const bin = items[i].binary![p];
-									const buffer = await this.helpers.getBinaryDataBuffer(i, p);
-									formData.input_reference = {
-										value: buffer,
-										options: { filename: bin.fileName, contentType: bin.mimeType },
-									};
-									break;
-								}
-							}
+						// 使用新的收集函数提取图片（只取第一张作为参考图）
+						const extractedImages = await extractImagesFromCollected(this, i, collectedBinaryItems, propNames, 1);
+						if (extractedImages.length > 0) {
+							const img = extractedImages[0];
+							formData.input_reference = {
+								value: img.buffer,
+								options: { filename: img.fileName || 'reference.jpg', contentType: img.mimeType },
+							};
 						}
 
 						const res = await this.helpers.request({

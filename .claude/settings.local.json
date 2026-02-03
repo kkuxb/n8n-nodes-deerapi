@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.deerapi.com)",
+      "Bash(npx:*)",
+      "Bash(dir \"%USERPROFILE%\\\\.claude*\" /a)",
+      "Bash(dir \"%USERPROFILE%\" /a)",
+      "Bash(findstr:*)",
+      "Bash(cd:*)",
+      "mcp__DeerAPI-API____read_project_oas_ijfjqu",
+      "mcp__DeerAPI-API____read_project_oas_ref_resources_ijfjqu",
+      "Bash(powershell -Command:*)",
+      "Bash(npm run build:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "mcp__DeerAPI-API____refresh_project_oas_ijfjqu",
+      "Bash(more:*)",
+      "WebFetch(domain:platform.deerapi.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:openai.com)",
+      "WebFetch(domain:help.aliyun.com)"
+    ]
+  }
+}

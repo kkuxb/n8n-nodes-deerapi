@@ -1,2 +1,9 @@
 dist
 node_modules
+*.log
+*.tmp
+tmpclaude-*
+nul
+.DS_Store
+Thumbs.db
+*.tsbuildinfo
