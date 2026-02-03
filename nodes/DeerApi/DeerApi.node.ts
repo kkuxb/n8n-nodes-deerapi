@@ -55,19 +55,19 @@ async function collectImagesFromNodes(
 	};
 
 	// 辅助函数：从指定节点的 Binary 中提取图片
-	// 使用 getBinaryDataBuffer 的第三个参数 sourceNodeName 来跨节点读取
+	// 使用与 Code 节点相同的方式：$() 获取数据 + getBinaryDataBuffer 第三个参数读取
 	const extractFromNode = async (
 		nodeName: string,
 		nodeItemIndex: number,
 	): Promise<void> => {
 		try {
-			// 获取指定节点的数据
-			const nodeItems = context.evaluateExpression(
-				`{{ $('${nodeName}').all() }}`,
-				itemIndex
-			) as INodeExecutionData[] | undefined;
+			// 使用 getWorkflowDataProxy 获取 $() 函数，与 Code 节点写法一致
+			const dataProxy = context.getWorkflowDataProxy(itemIndex);
+			const $func = dataProxy.$ as (nodeName: string) => { all: () => INodeExecutionData[] };
 
-			if (!nodeItems || !Array.isArray(nodeItems) || nodeItems.length === 0) return;
+			// 直接调用 $('nodeName').all()，与你的代码节点一致
+			const nodeItems = $func(nodeName).all();
+			if (!nodeItems || nodeItems.length === 0) return;
 
 			const nodeItem = nodeItems[nodeItemIndex] || nodeItems[0];
 			if (!nodeItem?.binary) return;
@@ -87,15 +87,14 @@ async function collectImagesFromNodes(
 				if (alreadyExists) continue;
 
 				try {
-					// 使用 getBinaryDataBuffer 的第三个参数读取指定节点的 binary
-					// TypeScript 类型定义不完整，需要类型断言
-					const getBinaryBuffer = context.helpers.getBinaryDataBuffer as (
-						itemIndex: number,
-						propertyName: string,
-						sourceNodeName?: string,
-					) => Promise<Buffer>;
-
-					const buffer = await getBinaryBuffer(nodeItemIndex, propName, nodeName);
+					// 使用与 Code 节点完全相同的调用方式
+					// this.helpers.getBinaryDataBuffer(i, key, targetNodeName)
+					// 使用 as any 绕过类型检查，保持 this 绑定
+					const buffer = await (context.helpers as any).getBinaryDataBuffer(
+						nodeItemIndex,
+						propName,
+						nodeName,
+					);
 
 					if (buffer) {
 						images.push({

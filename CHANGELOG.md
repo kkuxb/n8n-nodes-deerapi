@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.5.4] - 2026-02-03
+
+### Fixed
+
+- **彻底修复跨节点 Binary 读取问题**
+- 使用 `getWorkflowDataProxy().$()` 直接获取节点数据，与 Code 节点写法一致
+- 使用 `(context.helpers as any).getBinaryDataBuffer(i, key, nodeName)` 保持 `this` 绑定
+- 修复了两个根本问题：
+  1. `evaluateExpression` 返回序列化副本导致 Binary 引用丢失
+  2. 类型断言后赋值给变量导致 `this` 绑定丢失
+
 ## [1.5.2] - 2026-02-03
 
 ### Fixed
