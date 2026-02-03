@@ -16,17 +16,6 @@ interface CollectedImage {
 	sourceName: string;
 }
 
-// 从 IBinaryData 对象中提取 base64 数据
-// n8n 存储二进制数据有两种模式：内存模式（data字段存在）和文件模式（data字段不存在）
-function getBinaryBase64(binaryData: IBinaryData): string | null {
-	// 内存模式：直接从 data 字段读取
-	if (binaryData.data) {
-		return binaryData.data;
-	}
-	// 文件模式：无法直接读取，返回 null
-	return null;
-}
-
 // 从指定节点获取 Binary 数据并提取图片
 async function collectImagesFromNodes(
 	context: IExecuteFunctions,
@@ -79,27 +68,41 @@ async function collectImagesFromNodes(
 			if (!binaryData) continue;
 			if (!binaryData.mimeType?.startsWith('image/')) continue;
 
-			// 检查是否已存在相同图片
-			const alreadyExists = images.some(img =>
-				img.fileName === binaryData.fileName &&
-				img.mimeType === binaryData.mimeType
-			);
+			// 检查是否已存在相同图片（通过 id 或 fileName+mimeType 判断）
+			const alreadyExists = images.some(img => {
+				// 如果有 binaryData.id，优先用 id 判断
+				if (binaryData.id && img.fileName === binaryData.id) return true;
+				return img.fileName === binaryData.fileName && img.mimeType === binaryData.mimeType;
+			});
 			if (alreadyExists) continue;
 
 			try {
-				// 尝试从 data 字段读取（内存模式）
-				const base64Data = getBinaryBase64(binaryData);
-				if (base64Data) {
-					const buffer = Buffer.from(base64Data, 'base64');
+				let buffer: Buffer | null = null;
+
+				// 方案1：尝试从 id 读取（文件存储模式）
+				if (binaryData.id) {
+					try {
+						const stream = await context.helpers.getBinaryStream(binaryData.id);
+						buffer = await context.helpers.binaryToBuffer(stream);
+					} catch {
+						// getBinaryStream 失败，尝试其他方法
+					}
+				}
+
+				// 方案2：尝试从 data 字段读取（内存模式）
+				if (!buffer && binaryData.data) {
+					buffer = Buffer.from(binaryData.data, 'base64');
+				}
+
+				if (buffer) {
 					images.push({
-						base64: base64Data,
+						base64: buffer.toString('base64'),
 						mimeType: binaryData.mimeType,
 						fileName: binaryData.fileName,
 						buffer,
 						sourceName,
 					});
 				}
-				// 文件模式下无法读取其他节点的数据，跳过
 			} catch {
 				// 无法读取该图片，跳过
 			}
