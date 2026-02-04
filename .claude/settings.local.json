@@ -25,7 +25,8 @@
       "WebFetch(domain:community.n8n.io)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(npm show:*)"
+      "Bash(npm show:*)",
+      "Bash(dir:*)"
     ]
   }
 }

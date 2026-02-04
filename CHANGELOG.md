@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.7] - 2026-02-04
+
+### Added
+
+- **图像生成新增模型**：支持 `Gemini-2.5-Flash-Image` 模型
+  - 调用方式与 Gemini-3-Pro-Image 一致
+  - 支持尺寸比例参数
+  - 无需分辨率参数配置（相比 Gemini-3-Pro-Image）
+
 ## [1.5.6] - 2026-02-04
 
 ### Added

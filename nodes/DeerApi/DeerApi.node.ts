@@ -183,6 +183,7 @@ export class DeerApi implements INodeType {
 				displayOptions: { show: { mode: ['image'] } },
 				options: [
 					{ name: 'Gemini-3-Pro-Image', value: 'gemini-3-pro-image' },
+					{ name: 'Gemini-2.5-Flash-Image', value: 'gemini-2.5-flash-image' },
 					{ name: '即梦 4.5', value: 'doubao-seedream-4-5-251128' },
 				],
 				default: 'gemini-3-pro-image',
@@ -326,7 +327,7 @@ export class DeerApi implements INodeType {
 				displayName: '尺寸比例',
 				name: 'aspectRatio',
 				type: 'options',
-				displayOptions: { show: { mode: ['image'], imageModel: ['gemini-3-pro-image'] } },
+				displayOptions: { show: { mode: ['image'], imageModel: ['gemini-3-pro-image', 'gemini-2.5-flash-image'] } },
 				options: [
 					{ name: '1:1', value: '1:1' }, { name: '3:2', value: '3:2' },
 					{ name: '2:3', value: '2:3' }, { name: '16:9', value: '16:9' },
@@ -463,7 +464,6 @@ export class DeerApi implements INodeType {
 				} else if (mode === 'image') {
 					const userPrompt = this.getNodeParameter('userPrompt', i) as string;
 					const imageModel = this.getNodeParameter('imageModel', i) as string;
-					const rawSize = this.getNodeParameter('imageSize', i) as string;
 
 					// 获取 Binary 来源模式参数
 					const binarySourceMode = this.getNodeParameter('binarySourceMode', i, 'current') as 'current' | 'specified';
@@ -473,7 +473,7 @@ export class DeerApi implements INodeType {
 					// 收集 Binary 数据
 					const collectedBinary = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
 
-					if (imageModel === 'gemini-3-pro-image') {
+					if (imageModel === 'gemini-3-pro-image' || imageModel === 'gemini-2.5-flash-image') {
 						const aspectRatio = this.getNodeParameter('aspectRatio', i) as string;
 						const parts: any[] = [{ text: userPrompt }];
 
@@ -483,20 +483,34 @@ export class DeerApi implements INodeType {
 							parts.push({ inline_data: { data: img.base64, mime_type: img.mimeType } });
 						}
 
+						// 根据模型动态构建 generationConfig
+						const generationConfig: Record<string, unknown> = {
+							aspectRatio,
+							responseModalities: ["IMAGE"],
+						};
+						// 只有 gemini-3-pro-image 需要 imageSize 参数
+						if (imageModel === 'gemini-3-pro-image') {
+							const rawSize = this.getNodeParameter('imageSize', i) as string;
+							generationConfig.imageSize = rawSize;
+						}
+
 						const res = await this.helpers.request({
 							method: 'POST',
-							url: `${rawBaseUrl.replace(/\/v1$/, '')}/v1beta/models/gemini-3-pro-image:generateContent`,
+							url: `${rawBaseUrl.replace(/\/v1$/, '')}/v1beta/models/${imageModel}:generateContent`,
 							headers: { Authorization: `Bearer ${credentials.apiKey}` },
-							body: { contents: [{ role: 'user', parts }], generationConfig: { imageSize: rawSize, aspectRatio, responseModalities: ["IMAGE"] } },
+							body: { contents: [{ role: 'user', parts }], generationConfig },
 							json: true,
 						});
 						const b64 = res.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData.data;
 						if (b64) {
-							const binaryOutput = await this.helpers.prepareBinaryData(Buffer.from(b64, 'base64'), 'gemini_image.png', 'image/png');
+							const outputFileName = imageModel === 'gemini-2.5-flash-image' ? 'gemini_flash_image.png' : 'gemini_image.png';
+							const binaryOutput = await this.helpers.prepareBinaryData(Buffer.from(b64, 'base64'), outputFileName, 'image/png');
 							returnData.push({ json: { status: 'success' }, binary: { data: binaryOutput } });
 						} else throw new Error(`Gemini 接口未返回图像。`);
 
 					} else {
+						// 即梦模型需要 imageSize 参数
+						const rawSize = this.getNodeParameter('imageSize', i) as string;
 						// 从收集的 Binary 中提取图片（最多3张）
 						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 3);
 						const images: string[] = extractedImages.map(img => `data:${img.mimeType};base64,${img.base64}`);
