@@ -29,7 +29,10 @@
       "Bash(dir:*)",
       "mcp__airis-mcp-gateway__airis-find",
       "mcp__airis-mcp-gateway__airis-schema",
-      "mcp__airis-mcp-gateway__airis-exec"
+      "mcp__airis-mcp-gateway__airis-exec",
+      "Bash(npm view:*)",
+      "Bash(npm pack:*)",
+      "Bash(tar:*)"
     ]
   }
 }

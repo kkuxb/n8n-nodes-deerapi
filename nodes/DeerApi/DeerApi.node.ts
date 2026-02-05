@@ -15,22 +15,29 @@ interface ImageData {
 	buffer: Buffer;
 }
 
-// 从指定节点收集 Binary 数据并合并
+// 收集结果接口，包含 binary 数据和预读取的 buffer 映射
+interface CollectedBinaryResult {
+	binary: Record<string, IBinaryData>;
+	bufferMap: Map<string, Buffer>; // propName -> 预读取的 buffer
+}
+
+// 从指定节点收集 Binary 数据并合并（同时预读取文件系统中的 binary）
 async function collectBinaryFromNodes(
 	context: IExecuteFunctions,
 	itemIndex: number,
 	sourceMode: 'current' | 'specified',
 	specifiedNodes: string[],
-): Promise<Record<string, IBinaryData>> {
+): Promise<CollectedBinaryResult> {
 	const mergedBinary: Record<string, IBinaryData> = {};
+	const bufferMap = new Map<string, Buffer>();
 
 	if (sourceMode === 'current') {
-		// 当前模式：直接返回当前输入的 binary
+		// 当前模式：直接返回当前输入的 binary（不需要预读取，getBinaryDataBuffer 可用）
 		const items = context.getInputData();
 		if (items[itemIndex]?.binary) {
-			return { ...items[itemIndex].binary };
+			return { binary: { ...items[itemIndex].binary }, bufferMap };
 		}
-		return mergedBinary;
+		return { binary: mergedBinary, bufferMap };
 	}
 
 	// 获取工作流数据代理
@@ -73,6 +80,24 @@ async function collectBinaryFromNodes(
 				}
 
 				mergedBinary[newPropName] = binaryData as IBinaryData;
+
+				// 如果 binary 存储在文件系统中（有 id），立即预读取其内容
+				if (binaryData.id) {
+					try {
+						const stream = await context.helpers.getBinaryStream(binaryData.id);
+						const buffer = await context.helpers.binaryToBuffer(stream);
+						bufferMap.set(newPropName, buffer);
+					} catch {
+						// 如果读取失败，尝试使用内联 data
+						if (binaryData.data) {
+							bufferMap.set(newPropName, Buffer.from(binaryData.data, 'base64'));
+						}
+					}
+				} else if (binaryData.data) {
+					// 内联 base64 数据，直接解码
+					bufferMap.set(newPropName, Buffer.from(binaryData.data, 'base64'));
+				}
+
 				binaryIndex++;
 			}
 		} catch {
@@ -85,11 +110,11 @@ async function collectBinaryFromNodes(
 	if (Object.keys(mergedBinary).length === 0) {
 		const items = context.getInputData();
 		if (items[itemIndex]?.binary) {
-			return { ...items[itemIndex].binary };
+			return { binary: { ...items[itemIndex].binary }, bufferMap };
 		}
 	}
 
-	return mergedBinary;
+	return { binary: mergedBinary, bufferMap };
 }
 
 // 从 Binary 对象中提取图片
@@ -99,6 +124,7 @@ async function extractImagesFromBinary(
 	binary: Record<string, IBinaryData>,
 	propNames: string[],
 	maxImages: number,
+	bufferMap?: Map<string, Buffer>,
 ): Promise<ImageData[]> {
 	const images: ImageData[] = [];
 
@@ -111,10 +137,13 @@ async function extractImagesFromBinary(
 
 		try {
 			// 需要从 binary data 获取 buffer
-			// 如果有 id，使用 getBinaryDataBuffer；否则使用 base64 解码
 			let buffer: Buffer;
-			if (binaryData.id) {
-				// 存储在文件系统中的 binary
+
+			// 优先使用预读取的 buffer（跨节点收集时已读取）
+			if (bufferMap?.has(propName)) {
+				buffer = bufferMap.get(propName)!;
+			} else if (binaryData.id) {
+				// 存储在文件系统中的 binary（当前节点输入）
 				buffer = await context.helpers.getBinaryDataBuffer(itemIndex, propName);
 			} else if (binaryData.data) {
 				// 内联 base64 数据
@@ -440,10 +469,10 @@ export class DeerApi implements INodeType {
 					const specifiedNodes = sourceNodeNamesInput.split(',').map(s => s.trim()).filter(s => s !== '');
 
 					// 收集 Binary 数据
-					const collectedBinary = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
+					const { binary: collectedBinary, bufferMap } = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
 
 					// 从收集的 Binary 中提取图片
-					const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 1);
+					const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 1, bufferMap);
 					const firstBase64 = extractedImages.length > 0 ? extractedImages[0].base64 : '';
 					const firstMime = extractedImages.length > 0 ? extractedImages[0].mimeType : 'image/jpeg';
 
@@ -472,14 +501,14 @@ export class DeerApi implements INodeType {
 					const specifiedNodes = sourceNodeNamesInput.split(',').map(s => s.trim()).filter(s => s !== '');
 
 					// 收集 Binary 数据
-					const collectedBinary = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
+					const { binary: collectedBinary, bufferMap } = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
 
 					if (imageModel === 'gemini-3-pro-image' || imageModel === 'gemini-2.5-flash-image') {
 						const aspectRatio = this.getNodeParameter('aspectRatio', i) as string;
 						const parts: any[] = [{ text: userPrompt }];
 
 						// 从收集的 Binary 中提取图片（最多3张）
-						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 3);
+						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 3, bufferMap);
 						for (const img of extractedImages) {
 							parts.push({ inline_data: { data: img.base64, mime_type: img.mimeType } });
 						}
@@ -513,7 +542,7 @@ export class DeerApi implements INodeType {
 						// 即梦模型需要 imageSize 参数
 						const rawSize = this.getNodeParameter('imageSize', i) as string;
 						// 从收集的 Binary 中提取图片（最多3张）
-						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 3);
+						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 3, bufferMap);
 						const images: string[] = extractedImages.map(img => `data:${img.mimeType};base64,${img.base64}`);
 
 						const responseData = await this.helpers.request({
@@ -557,10 +586,10 @@ export class DeerApi implements INodeType {
 						const specifiedNodes = sourceNodeNamesInput.split(',').map(s => s.trim()).filter(s => s !== '');
 
 						// 收集 Binary 数据
-						const collectedBinary = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
+						const { binary: collectedBinary, bufferMap } = await collectBinaryFromNodes(this, i, binarySourceMode, specifiedNodes);
 
 						// 从收集的 Binary 中提取图片（只取第一张作为参考图）
-						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 1);
+						const extractedImages = await extractImagesFromBinary(this, i, collectedBinary, propNames, 1, bufferMap);
 						if (extractedImages.length > 0) {
 							const img = extractedImages[0];
 							formData.input_reference = {
