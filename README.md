@@ -1,4 +1,4 @@
-# n8n-nodes-DeerAPI（V1.5.7 版本）
+# n8n-nodes-DeerAPI（V1.5.8 版本）
 
 🚀 **告别见鬼的 HTTP Request 节点！** 在 n8n 中像原生节点一样傻瓜式调用 DeerAPI 中的模型。
 

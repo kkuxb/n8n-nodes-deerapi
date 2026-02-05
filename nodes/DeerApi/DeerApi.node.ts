@@ -44,8 +44,9 @@ async function collectBinaryFromNodes(
 
 	for (const nodeName of targetNodeNames) {
 		try {
-			// 使用 $items(nodeName) 获取节点数据
-			const nodeItems = workflowProxy.$items(nodeName, 0, undefined);
+			// 使用 $(nodeName).all() 获取节点数据（与 n8n Code 节点一致）
+			const nodeProxy = workflowProxy.$(nodeName);
+			const nodeItems: INodeExecutionData[] = nodeProxy.all();
 
 			if (!nodeItems || nodeItems.length === 0) continue;
 

@@ -26,7 +26,10 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm show:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "mcp__airis-mcp-gateway__airis-find",
+      "mcp__airis-mcp-gateway__airis-schema",
+      "mcp__airis-mcp-gateway__airis-exec"
     ]
   }
 }
