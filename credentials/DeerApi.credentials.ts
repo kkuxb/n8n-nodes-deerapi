@@ -13,13 +13,5 @@ export class DeerApi implements ICredentialType {
 			default: '',
 			required: true,
 		},
-		{
-			displayName: 'Base URL',
-			name: 'baseUrl',
-			type: 'string',
-			default: 'https://api.deerapi.com/v1',
-			placeholder: 'https://api.deerapi.com/v1',
-			required: true,
-		},
 	];
 }

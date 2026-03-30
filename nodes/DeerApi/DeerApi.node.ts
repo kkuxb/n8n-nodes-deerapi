@@ -186,8 +186,6 @@ export class DeerApi implements INodeType {
 				options: [
 					{ name: '文字生成', value: 'text' },
 					{ name: '图像生成', value: 'image' },
-					{ name: '视频生成 (Sora 2)', value: 'video' },
-					{ name: '向量嵌入 (Embeddings)', value: 'embeddings' },
 				],
 				default: 'text',
 			},
@@ -444,8 +442,8 @@ export class DeerApi implements INodeType {
 		const returnData: INodeExecutionData[] = [];
 		const credentials = await this.getCredentials('deerApi');
 		const mode = this.getNodeParameter('mode', 0) as string;
-		const rawBaseUrl = (credentials.baseUrl as string).replace(/\/$/, '');
-		const soraBaseUrl = rawBaseUrl.replace(/\/v1$/, '');
+		const rawBaseUrl = 'https://api.maibao.chat/v1';
+		const soraBaseUrl = 'https://api.maibao.chat';
 
 		for (let i = 0; i < items.length; i++) {
 			try {
